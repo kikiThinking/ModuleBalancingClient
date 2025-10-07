@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+option go_package = "/grpc";
+
+package ModuleBalancing;
+
+service Module {
+  rpc Upload (stream UploadRequest) returns (UploadResponse);
+  rpc Analyzing(analyzingRequest) returns (analyzingResponse);
+  rpc IntegrityVerification(IntegrityVerificationRequest) returns (IntegrityVerificationResponse);
+  rpc Push(ModuleDownloadRequest) returns (stream ModulePushResponse);
+}
+
+service Expirationpush {
+  rpc Expiration(ExpirationPushRequest) returns (stream ExpirationPushResponse);
+}
+
+//service ExpirationNotice {
+//  rpc Notice(stream ExpirationServices) returns (stream ExpirationClient);
+//}
+
+service Storerecord {
+  rpc Updatestorerecord(stream StorerecordRequest) returns (StorerecordResponse);
+}
+
+
+service ClientCheck {
+  rpc MD5(MD5Request) returns (MD5Response);
+  rpc Data(DataRequest) returns (stream DataResponse);
+}
+
+
+message MD5Request {}
+
+message MD5Response {
+  string MD5 = 1;
+}
+
+message DataRequest {
+  int64 offset = 1;
+  string serveraddress = 2;
+}
+
+message DataResponse {
+  bytes  content = 1;
+  bool   completed = 2;
+}
+
+message StorerecordRequest {
+  string heartbeat = 1;
+  string serveraddress = 2;
+  string partnumber = 3;
+  repeated string modulenames = 4;
+}
+
+message StorerecordResponse {
+  bool isok = 1;
+}
+
+message IntegrityVerificationRequest {
+  string filename = 1;
+}
+
+message IntegrityVerificationResponse {
+  string filename = 1;
+  string size = 2;
+  string crc64 = 3;
+}
+
+message ModuleDownloadRequest {
+  string serveraddress = 1;
+  string filename = 2;
+  int64 offset = 3;
+}
+
+message ModulePushResponse {
+  bytes  content = 4;
+  bool   completed = 3;
+}
+
+message UploadRequest {
+  oneof data {
+    finformation information = 1;
+    bytes chunk_data = 2;
+  }
+}
+
+message finformation {
+  string filename = 1;
+  string size = 2;
+  string crc64 = 3;
+  string MUnix = 4;
+  string CUnix = 5;
+}
+
+message UploadResponse {
+  string message = 1;
+  bool success = 2;
+}
+
+message analyzingRequest {
+  string  filename = 1;
+  bytes   fbytes = 2;
+}
+
+message analyzingResponse {
+  repeated string modulename = 1;
+  repeated string analyzingerror = 2;
+}
+
+message ExpirationPushRequest {
+  string  serveraddress = 1;
+  int64   maxretentiondays = 2;
+}
+
+message ExpirationPushResponse {
+  string   partnumber = 1;
+  repeated string modulename = 2;
+  string   heartbeat = 3;
+}

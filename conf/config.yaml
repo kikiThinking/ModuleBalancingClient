@@ -1,0 +1,10 @@
+Setting:
+  Maxretentiondays: 30
+  Common: "E:/Client/Common"
+  Chkdir: "E:/Client/Check"
+  AODdir: ""
+
+
+GRPCServices:
+  Host: localhost
+  Port: 9998
