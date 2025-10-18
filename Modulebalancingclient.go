@@ -28,7 +28,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/rjeczalik/notify"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"gopkg.in/yaml.v3"
@@ -68,6 +67,7 @@ func init() {
 	}
 
 	clientmd5 = fmt.Sprintf("%x", md5.Sum(fbyte))
+	fmt.Println("Client MD5: ", clientmd5)
 
 	serverconfiguration = new(env.Configuration)
 	if err = yaml.Unmarshal(f, serverconfiguration); err != nil {
@@ -191,7 +191,8 @@ func main() {
 				ctxfordownload, celfordownload := context.WithCancel(context.Background())
 
 				if err = api.Download(ctxfordownload, conn, strings.Join([]string{serverconfiguration.Setting.Common, filename}, `\`), serverip); err != nil {
-					logmar.GetLogger("Download").Error("Failed to download module:", err.Error())
+					fmt.Printf(fmt.Sprintf("Failed to download module: %s\r\n", err.Error()))
+					logmar.GetLogger("Download").Error(fmt.Sprintf("Failed to download module: %s", err.Error()))
 					celfordownload()
 					return err
 				}
@@ -231,6 +232,16 @@ func main() {
 						logmar.GetLogger("Download").Info(fmt.Sprintf("Delete file(%s) and download again", item))
 						_ = os.Remove(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`))
 						clsforcheck()
+
+						// CRC值不一致, 请求服务器重新计算CRC
+						ctxforreload, clsforreload := context.WithCancel(context.Background())
+						if err = api.Modulereload(ctxforreload, conn, serverip, item); err != nil {
+							logmar.GetLogger("Download").Error("failed to reload module: ", err.Error())
+							isok = false
+							clsforreload()
+							break
+						}
+
 						if err = downloadfunction(item); err != nil {
 							isok = false
 							break
@@ -338,7 +349,7 @@ func Updatestore(source chan *rpc.StorerecordRequest) {
 }
 
 func ClientUpgrade() {
-	var ticker = time.NewTicker(10 * time.Second)
+	var ticker = time.NewTicker(1 * time.Minute)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	for {
@@ -348,7 +359,7 @@ func ClientUpgrade() {
 			if err = api.ClientUpgrade(ctx, conn, serverip, clientmd5, readrunpath(), waitupgrade); err != nil {
 				fmt.Println(err.Error())
 			}
-			ticker.Reset(10 * time.Second)
+			ticker.Reset(1 * time.Minute)
 
 		case <-waitupgrade:
 			for {
@@ -491,39 +502,6 @@ func Monitor(monitorpath string, noticechan chan string) {
 		case err = <-monitordir.Errors:
 			logmar.GetLogger("Monitor").Error("Monitor Path Error: %s", err.Error())
 			return
-		}
-	}
-}
-
-// Monitorpath 监听客户端上传DDD文件
-func Monitorpath(monitorpath string, noticechan chan string) {
-	var (
-		monitorchannel = make(chan notify.EventInfo, 20)
-		monitorevent   = notify.Create
-	)
-
-	if err = notify.Watch(monitorpath, monitorchannel, monitorevent); err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	defer notify.Stop(monitorchannel)
-	fmt.Printf("Start listening to directory -> (%s)\r\n", monitorpath)
-	logmar.GetLogger("Monitor").Info(fmt.Sprintf("Start listening to directory -> (%s)", monitorpath))
-
-	for {
-		select {
-		case cre := <-monitorchannel:
-			programwork.Run()
-			time.Sleep(time.Second * 5)
-			switch cre.Event() {
-			case notify.Create:
-				logmar.GetLogger("Monitor").Info(fmt.Sprintf("Monitor new create: %s", cre.Path()))
-				noticechan <- cre.Path()
-				programwork.Done()
-			default:
-				programwork.Done()
-			}
 		}
 	}
 }

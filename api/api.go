@@ -198,7 +198,6 @@ func Download(ctx context.Context, conn *grpc.ClientConn, fp, serverip string) e
 
 	// 判断下载的文件大小与服务端提供的是否一致
 	if size != filesize {
-		fmt.Printf("src: %v dest: %v\n", size, filesize)
 		return errors.New("files are different sizes")
 	}
 
@@ -324,5 +323,12 @@ func ClientUpgrade(ctx context.Context, conn *grpc.ClientConn, serverip, clientm
 
 	fmt.Println("\r\nDownload successful, waiting for upgrade...")
 	upgradechannel <- struct{}{}
+	return nil
+}
+
+func Modulereload(ctx context.Context, conn *grpc.ClientConn, serverip, filename string) error {
+	if _, err = rpc.NewModuleClient(conn).ModuleReload(ctx, &rpc.ModuleReloadRequest{Filename: filename, Serverip: serverip}); err != nil {
+		return err
+	}
 	return nil
 }

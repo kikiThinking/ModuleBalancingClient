@@ -2,6 +2,7 @@ syntax = "proto3";
 
 option go_package = "/grpc";
 
+
 package ModuleBalancing;
 
 service Module {
@@ -9,7 +10,9 @@ service Module {
   rpc Analyzing(analyzingRequest) returns (analyzingResponse);
   rpc IntegrityVerification(IntegrityVerificationRequest) returns (IntegrityVerificationResponse);
   rpc Push(ModuleDownloadRequest) returns (stream ModulePushResponse);
+  rpc ModuleReload(ModuleReloadRequest) returns (EmptyResponse);
 }
+
 
 service Expirationpush {
   rpc Expiration(ExpirationPushRequest) returns (stream ExpirationPushResponse);
@@ -28,6 +31,14 @@ service ClientCheck {
   rpc MD5(MD5Request) returns (MD5Response);
   rpc Data(DataRequest) returns (stream DataResponse);
 }
+
+
+message ModuleReloadRequest {
+  string filename = 1;
+  string serverip = 2;
+}
+
+message EmptyResponse {}
 
 
 message MD5Request {}
