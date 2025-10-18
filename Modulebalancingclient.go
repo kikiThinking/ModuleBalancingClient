@@ -50,7 +50,7 @@ var (
 func init() {
 	Programinformation()
 	if serverip = env.GetIP(); strings.EqualFold(serverip, "") {
-		fmt.Println("Failed to read local ip address")
+		fmt.Println("Failed to read server ip")
 		os.Exit(1)
 	}
 	serverip = strings.Split(serverip, ":")[0]
@@ -58,7 +58,7 @@ func init() {
 	fmt.Println("Server address: ", serverip)
 	f, err := os.ReadFile("conf/config.yaml")
 	if err != nil {
-		log.Fatalf("could not open configuration file: %v", err)
+		fmt.Printf("could not open configuration file: %v\r\n", err)
 		return
 	}
 
@@ -71,11 +71,11 @@ func init() {
 
 	serverconfiguration = new(env.Configuration)
 	if err = yaml.Unmarshal(f, serverconfiguration); err != nil {
-		log.Fatalf("could not parse configuration file: %v", err)
+		fmt.Printf("could not parse configuration file: %v\r\n", err)
 		return
 	}
 
-	// 客户端升级的关键代码, 用于判断当前是否有重要任务在执行中
+	// 客户端升级代码, 用于判断当前是否有重要任务在执行中
 	programwork = new(env.Work)
 	programwork.Workchannel = make(chan struct{}, 10)
 
@@ -127,7 +127,7 @@ func main() {
 	go Expiration()
 	go Updatestore(updatestoreprocess)
 	go Monitor(serverconfiguration.Setting.Chkdir, moduledownloadprocess)
-	go Upadte()
+	go ClientUpgrade()
 
 	for {
 		select {
@@ -141,19 +141,20 @@ func main() {
 			}
 
 			fp = strings.Join([]string{serverconfiguration.Setting.AODdir, strings.NewReplacer(".ddd", ".dat", ".DDD", ".dat").Replace(filepath.Base(fp))}, "/")
-			logmar.GetLogger("Download").Info(fmt.Sprintf("AOD(%s) synchronization module request....", fp))
+
 			fmt.Printf("AOD(%s) synchronization module request....\r\n", fp)
+			logmar.GetLogger("Download").Info(fmt.Sprintf("AOD(%s) synchronization module request....", fp))
 
 			ctxforanalyzing, celforanalyzing := context.WithCancel(context.Background())
 			if modulenames, err = api.Analyzing(ctxforanalyzing, conn, fp, serverconfiguration.Setting.Common); err != nil {
-				programwork.Done()
-				celforanalyzing()
-				logmar.GetLogger("Download").Error(fmt.Sprintf("Failed to analyzing file: %s", err.Error()))
 				fmt.Printf(fmt.Sprintf("Failed to analyzing file: %s", err.Error()))
+				logmar.GetLogger("Download").Error(fmt.Sprintf("Failed to analyzing file: %s", err.Error()))
+				celforanalyzing()
+				programwork.Done()
 				continue
 			}
-
 			celforanalyzing()
+
 			updatestoreprocess <- &rpc.StorerecordRequest{
 				Heartbeat:     "",
 				Serveraddress: serverip,
@@ -164,19 +165,19 @@ func main() {
 			// 判断.OK文件是否存在, 如果存在再去检查文件是否缺失
 			fileok := strings.Join([]string{serverconfiguration.Setting.Common, strings.NewReplacer(".dat", ".OK", ".DAT", ".OK").Replace(filepath.Base(fp))}, `\`)
 			if _, exist := os.Stat(fileok); !os.IsNotExist(exist) {
-				logmar.GetLogger("Download").Info(fmt.Sprintf("%s already exists, If you need to download and check again, please delete it .OK file", filepath.Base(fileok)))
 				fmt.Printf("%s already exists, If you need to download and check again, please delete it .OK file\r\n", filepath.Base(fileok))
+				logmar.GetLogger("Download").Info(fmt.Sprintf("%s already exists, If you need to download and check again, please delete it .OK file", filepath.Base(fileok)))
 
-				var existall = true
+				var intact = true
 				for _, val := range modulenames {
 					if _, exist = os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, val}, `\`)); os.IsNotExist(exist) {
-						existall = false
 						fmt.Printf("Error: Partnumber(%s) Module(%s) is not found\r\n", filepath.Base(fp), val)
 						logmar.GetLogger("Download").Info(fmt.Sprintf("Error: Partnumber(%s) Module(%s) is not found", filepath.Base(fp), val))
+						intact = false
 					}
 				}
 
-				if existall {
+				if intact {
 					programwork.Done()
 					continue
 				}
@@ -188,11 +189,13 @@ func main() {
 			downloadfunction := func(filename string) error {
 				logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) does not exist, requesting server download", filename))
 				ctxfordownload, celfordownload := context.WithCancel(context.Background())
+
 				if err = api.Download(ctxfordownload, conn, strings.Join([]string{serverconfiguration.Setting.Common, filename}, `\`), serverip); err != nil {
 					logmar.GetLogger("Download").Error("Failed to download module:", err.Error())
 					celfordownload()
 					return err
 				}
+
 				logmar.GetLogger("Download").Info(fmt.Sprintf("Dowmload module(%s) completed", filename))
 				celfordownload()
 				return nil
@@ -207,20 +210,18 @@ func main() {
 						break
 					}
 				} else {
-					var (
-						crc  uint64
-						size int64
-					)
+					var crc uint64
+					var size int64
 
-					logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) file exist verifying module integrity", item))
 					fmt.Printf("Module(%s) file exist verifying module integrity", item)
+					logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) file exist verifying module integrity", item))
 					if crc, size, err = env.CRC64(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`), 128*1024*1024, 8); err != nil {
 						isok = false
 						break
 					}
 
-					ctxforcheck, celforcheck := context.WithCancel(context.Background())
-					if err = api.Checkfileinfoemation(ctxforcheck, conn, &rpc.IntegrityVerificationResponse{
+					ctxforcheck, clsforcheck := context.WithCancel(context.Background())
+					if err = api.Checkfileinformation(ctxforcheck, conn, &rpc.IntegrityVerificationResponse{
 						Filename: item,
 						Size:     strconv.FormatInt(size, 10),
 						Crc64:    strconv.FormatUint(crc, 10),
@@ -229,7 +230,7 @@ func main() {
 						logmar.GetLogger("Download").Error(err.Error())
 						logmar.GetLogger("Download").Info(fmt.Sprintf("Delete file(%s) and download again", item))
 						_ = os.Remove(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`))
-						celforcheck()
+						clsforcheck()
 						if err = downloadfunction(item); err != nil {
 							isok = false
 							break
@@ -248,9 +249,11 @@ func main() {
 					logmar.GetLogger("Download").Error("Failed to create ok tag: ", err.Error())
 					continue
 				}
-				logmar.GetLogger("Download").Info(fmt.Sprintf("All modules are ready and generated %s file", filepath.Base(fileok)))
+
 				fmt.Printf("All modules are ready and generated %s file\r\n", filepath.Base(fileok))
-				f.Close()
+				logmar.GetLogger("Download").Info(fmt.Sprintf("All modules are ready and generated %s file", filepath.Base(fileok)))
+				_ = f.Close()
+
 			} else {
 				logmar.GetLogger("Download").Error("failed to download modules")
 			}
@@ -296,11 +299,10 @@ func Updatestore(source chan *rpc.StorerecordRequest) {
 		select {
 		case req := <-source:
 			if err = stream.Send(req); err != nil {
-				fmt.Println("[Updatestore service]Disconnect from the server")
+				fmt.Println("[Updatestore service]Disconnect from the server, try to reconnect...")
 				ticker.Stop()
 				var connect = false
-				for i := 0; i <= 12; i++ {
-					fmt.Printf("\t----> [Updatestore service]Retry(%v)\r\n", i)
+				for {
 					time.Sleep(time.Second * 5)
 					if stream, err = updatestoreservice.Updatestorerecord(ctx); err != nil {
 						continue
@@ -335,7 +337,7 @@ func Updatestore(source chan *rpc.StorerecordRequest) {
 	}
 }
 
-func Upadte() {
+func ClientUpgrade() {
 	var ticker = time.NewTicker(10 * time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -356,11 +358,11 @@ func Upadte() {
 						"CMD.exe",
 						"/c",
 						"start",
-						fmt.Sprintf("%s/bin/ModuleBalancingUpdate.exe", readrunpath()),
+						fmt.Sprintf("%s/bin/ModuleBalancingUpgrade.exe", readrunpath()),
 						"-s",
 						fmt.Sprintf("%s/Modulebalancingclient.exe", readrunpath()),
 						"-d",
-						fmt.Sprintf("%s/temp/ModuleBalancingClient_update.exe", readrunpath()),
+						fmt.Sprintf("%s/temp/ModuleBalancingClient_upgrade.exe", readrunpath()),
 					)
 
 					_ = command.Run()
@@ -397,11 +399,9 @@ func Expiration() {
 				return
 			default:
 				var connect = false
-				fmt.Println("[Expiration service]Disconnect from the server")
-				for i := 0; i <= 12; i++ {
-					fmt.Printf("\t----> [Expiration service]Retry(%v)\r\n", i)
+				fmt.Println("[Expiration service]Disconnect from the server, try to reconnect...")
+				for {
 					time.Sleep(time.Second * 5)
-
 					if stream, err = expirtionservice.Expiration(ctx, &rpc.ExpirationPushRequest{
 						Serveraddress:    serverip,
 						Maxretentiondays: serverconfiguration.Setting.Maxretentiondays,

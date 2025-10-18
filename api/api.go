@@ -209,8 +209,8 @@ func Download(ctx context.Context, conn *grpc.ClientConn, fp, serverip string) e
 	return nil
 }
 
-// Checkfileinfoemation 用于判断本地文件与服务端文件 size|crc是否一致
-func Checkfileinfoemation(ctx context.Context, conn *grpc.ClientConn, src *rpc.IntegrityVerificationResponse) error {
+// Checkfileinformation 用于判断本地文件与服务端文件 size|crc是否一致
+func Checkfileinformation(ctx context.Context, conn *grpc.ClientConn, src *rpc.IntegrityVerificationResponse) error {
 	var (
 		informationclient = rpc.NewModuleClient(conn)
 	)
@@ -265,7 +265,7 @@ func ClientUpgrade(ctx context.Context, conn *grpc.ClientConn, serverip, clientm
 		filename  = headers.Get("Filename")[0]
 	)
 
-	f, err := os.Create(filepath.Join(apprunpath, "temp", "ModuleBalancingClient_update.exe"))
+	f, err := os.Create(filepath.Join(apprunpath, "temp", "ModuleBalancingClient_upgrade.exe"))
 
 	filesize, err = strconv.ParseInt(headers.Get("Size")[0], 10, 64)
 	if err != nil {
