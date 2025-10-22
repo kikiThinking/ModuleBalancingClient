@@ -221,6 +221,10 @@ func (the *Processprintstruct) Initialization() {
 		the.conversion = MB
 		the.processspri = goPrint.NewBar(the.Size / MB)
 		the.processspri.SetNotice("(MB)")
+	case the.Size < TB:
+		the.conversion = MB
+		the.processspri = goPrint.NewBar(the.Size / MB)
+		the.processspri.SetNotice("(MB)")
 
 	default:
 		the.conversion = TB

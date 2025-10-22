@@ -77,7 +77,7 @@ func init() {
 
 	// 客户端升级代码, 用于判断当前是否有重要任务在执行中
 	programwork = new(env.Work)
-	programwork.Workchannel = make(chan struct{}, 10)
+	programwork.Workchannel = make(chan struct{}, 1000)
 
 	// 初始化日志
 	logmar.RegisterBusiness(logmanager.LoggerConfig{
@@ -123,7 +123,6 @@ func main() {
 	}
 
 	defer conn.Close()
-
 	go Expiration()
 	go Updatestore(updatestoreprocess)
 	go Monitor(serverconfiguration.Setting.Chkdir, moduledownloadprocess)
@@ -133,143 +132,135 @@ func main() {
 		select {
 		case fp := <-moduledownloadprocess:
 			programwork.Run()
-			var modulenames = make([]string, 0)
-			if _, exist := os.Stat(fp); !os.IsNotExist(exist) {
-				if err = os.Remove(fp); err != nil {
-					logmar.GetLogger(`Download`).Error("Failed to remove download Tag: ", fp)
+
+			func() {
+				defer programwork.Done()
+				var modulenames = make([]string, 0)
+				if _, exist := os.Stat(fp); !os.IsNotExist(exist) {
+					if err = os.Remove(fp); err != nil {
+						logmar.GetLogger(`Download`).Error("Failed to remove download Tag: ", fp)
+					}
 				}
-			}
 
-			fp = strings.Join([]string{serverconfiguration.Setting.AODdir, strings.NewReplacer(".ddd", ".dat", ".DDD", ".dat").Replace(filepath.Base(fp))}, "/")
+				fp = strings.Join([]string{serverconfiguration.Setting.AODdir, strings.NewReplacer(".ddd", ".dat", ".DDD", ".dat").Replace(filepath.Base(fp))}, "/")
 
-			fmt.Printf("AOD(%s) synchronization module request....\r\n", fp)
-			logmar.GetLogger("Download").Info(fmt.Sprintf("AOD(%s) synchronization module request....", fp))
+				fmt.Printf("AOD(%s) synchronization module request....\r\n", fp)
+				logmar.GetLogger("Download").Info(fmt.Sprintf("AOD(%s) synchronization module request....", fp))
 
-			ctxforanalyzing, celforanalyzing := context.WithCancel(context.Background())
-			if modulenames, err = api.Analyzing(ctxforanalyzing, conn, fp, serverconfiguration.Setting.Common); err != nil {
-				fmt.Printf(fmt.Sprintf("Failed to analyzing file: %s", err.Error()))
-				logmar.GetLogger("Download").Error(fmt.Sprintf("Failed to analyzing file: %s", err.Error()))
+				ctxforanalyzing, celforanalyzing := context.WithCancel(context.Background())
+				if modulenames, err = api.Analyzing(ctxforanalyzing, conn, fp, serverconfiguration.Setting.Common); err != nil {
+					fmt.Printf(fmt.Sprintf("Failed to analyzing file: %s", err.Error()))
+					logmar.GetLogger("Download").Error(fmt.Sprintf("Failed to analyzing file: %s", err.Error()))
+					celforanalyzing()
+					return
+				}
 				celforanalyzing()
-				programwork.Done()
-				continue
-			}
-			celforanalyzing()
 
-			updatestoreprocess <- &rpc.StorerecordRequest{
-				Heartbeat:     "",
-				Serveraddress: serverip,
-				Partnumber:    filepath.Base(fp),
-				Modulenames:   modulenames,
-			}
-
-			// 判断.OK文件是否存在, 如果存在再去检查文件是否缺失
-			fileok := strings.Join([]string{serverconfiguration.Setting.Common, strings.NewReplacer(".dat", ".OK", ".DAT", ".OK").Replace(filepath.Base(fp))}, `\`)
-			if _, exist := os.Stat(fileok); !os.IsNotExist(exist) {
-				fmt.Printf("%s already exists, If you need to download and check again, please delete it .OK file\r\n", filepath.Base(fileok))
-				logmar.GetLogger("Download").Info(fmt.Sprintf("%s already exists, If you need to download and check again, please delete it .OK file", filepath.Base(fileok)))
-
-				var intact = true
-				for _, val := range modulenames {
-					if _, exist = os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, val}, `\`)); os.IsNotExist(exist) {
-						fmt.Printf("Error: Partnumber(%s) Module(%s) is not found\r\n", filepath.Base(fp), val)
-						logmar.GetLogger("Download").Info(fmt.Sprintf("Error: Partnumber(%s) Module(%s) is not found", filepath.Base(fp), val))
-						intact = false
-					}
+				updatestoreprocess <- &rpc.StorerecordRequest{
+					Heartbeat:     "",
+					Serveraddress: serverip,
+					Partnumber:    filepath.Base(fp),
+					Modulenames:   modulenames,
 				}
 
-				if intact {
-					programwork.Done()
-					continue
-				}
+				// 判断.OK文件是否存在, 如果存在再去检查文件是否缺失
+				fileok := strings.Join([]string{serverconfiguration.Setting.Common, strings.NewReplacer(".dat", ".OK", ".DAT", ".OK").Replace(filepath.Base(fp))}, `\`)
+				if _, exist := os.Stat(fileok); !os.IsNotExist(exist) {
+					fmt.Printf("%s already exists, If you need to download and check again, please delete it .OK file\r\n", filepath.Base(fileok))
+					logmar.GetLogger("Download").Info(fmt.Sprintf("%s already exists, If you need to download and check again, please delete it .OK file", filepath.Base(fileok)))
 
-				fmt.Printf("Missing module files, try downloading again\r\n")
-			}
-
-			// 函数用于下载Module文件
-			downloadfunction := func(filename string) error {
-				logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) does not exist, requesting server download", filename))
-				ctxfordownload, celfordownload := context.WithCancel(context.Background())
-
-				if err = api.Download(ctxfordownload, conn, strings.Join([]string{serverconfiguration.Setting.Common, filename}, `\`), serverip); err != nil {
-					fmt.Printf(fmt.Sprintf("Failed to download module: %s\r\n", err.Error()))
-					logmar.GetLogger("Download").Error(fmt.Sprintf("Failed to download module: %s", err.Error()))
-					celfordownload()
-					return err
-				}
-
-				logmar.GetLogger("Download").Info(fmt.Sprintf("Dowmload module(%s) completed", filename))
-				celfordownload()
-				return nil
-			}
-
-			var isok = true
-			for _, item := range modulenames {
-				// 不存在即Download 存在就检查文件是否与服务端一致
-				if _, exist := os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`)); os.IsNotExist(exist) {
-					if err = downloadfunction(item); err != nil {
-						isok = false
-						break
-					}
-				} else {
-					var crc uint64
-					var size int64
-
-					fmt.Printf("Module(%s) file exist verifying module integrity", item)
-					logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) file exist verifying module integrity", item))
-					if crc, size, err = env.CRC64(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`), 128*1024*1024, 8); err != nil {
-						isok = false
-						break
-					}
-
-					ctxforcheck, clsforcheck := context.WithCancel(context.Background())
-					if err = api.Checkfileinformation(ctxforcheck, conn, &rpc.IntegrityVerificationResponse{
-						Filename: item,
-						Size:     strconv.FormatInt(size, 10),
-						Crc64:    strconv.FormatUint(crc, 10),
-					}); err != nil {
-						fmt.Println("\t ----> Failed")
-						logmar.GetLogger("Download").Error(err.Error())
-						logmar.GetLogger("Download").Info(fmt.Sprintf("Delete file(%s) and download again", item))
-						_ = os.Remove(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`))
-						clsforcheck()
-
-						// CRC值不一致, 请求服务器重新计算CRC
-						ctxforreload, clsforreload := context.WithCancel(context.Background())
-						if err = api.Modulereload(ctxforreload, conn, serverip, item); err != nil {
-							logmar.GetLogger("Download").Error("failed to reload module: ", err.Error())
-							isok = false
-							clsforreload()
-							break
+					var intact = true
+					for _, val := range modulenames {
+						if _, exist = os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, val}, `\`)); os.IsNotExist(exist) {
+							fmt.Printf("Error: Partnumber(%s) Module(%s) is not found\r\n", filepath.Base(fp), val)
+							logmar.GetLogger("Download").Info(fmt.Sprintf("Error: Partnumber(%s) Module(%s) is not found", filepath.Base(fp), val))
+							intact = false
 						}
+					}
 
+					if intact {
+						return
+					}
+
+					fmt.Printf("Missing module files, try downloading again\r\n")
+				}
+
+				// 函数用于下载Module文件
+				downloadfunction := func(filename string) error {
+					logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) does not exist, requesting server download", filename))
+					ctxfordownload, celfordownload := context.WithCancel(context.Background())
+
+					if err = api.Download(ctxfordownload, conn, strings.Join([]string{serverconfiguration.Setting.Common, filename}, `\`), serverip); err != nil {
+						fmt.Printf(fmt.Sprintf("Failed to download module: %s\r\n", err.Error()))
+						logmar.GetLogger("Download").Error(fmt.Sprintf("Failed to download module: %s", err.Error()))
+						celfordownload()
+						return err
+					}
+
+					logmar.GetLogger("Download").Info(fmt.Sprintf("Dowmload module(%s) completed", filename))
+					celfordownload()
+					return nil
+				}
+
+				var isok = true
+				for _, item := range modulenames {
+					// 不存在即Download 存在就检查文件是否与服务端一致
+					if _, exist := os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`)); os.IsNotExist(exist) {
 						if err = downloadfunction(item); err != nil {
 							isok = false
 							break
 						}
+					} else {
+						var crc uint64
+						var size int64
+
+						fmt.Printf("Module(%s) file exist verifying module integrity", item)
+						logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) file exist verifying module integrity", item))
+						if crc, size, err = env.CRC64(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`), 128*1024*1024, 8); err != nil {
+							isok = false
+							break
+						}
+
+						ctxforcheck, clsforcheck := context.WithCancel(context.Background())
+						if err = api.Checkfileinformation(ctxforcheck, conn, &rpc.IntegrityVerificationResponse{
+							Filename: item,
+							Size:     strconv.FormatInt(size, 10),
+							Crc64:    strconv.FormatUint(crc, 10),
+						}); err != nil {
+							fmt.Println("\t ----> Failed")
+							logmar.GetLogger("Download").Error(err.Error())
+							logmar.GetLogger("Download").Info(fmt.Sprintf("Delete file(%s) and download again", item))
+							_ = os.Remove(strings.Join([]string{serverconfiguration.Setting.Common, item}, `\`))
+							clsforcheck()
+
+							if err = downloadfunction(item); err != nil {
+								isok = false
+								break
+							}
+						}
+
+						clsforcheck()
+
+						fmt.Println("\t ----> OK")
+						logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) file integrity verification completed", item))
+					}
+				}
+
+				if isok {
+					f, err := os.Create(fileok)
+					if err != nil {
+						logmar.GetLogger("Download").Error("Failed to create ok tag: ", err.Error())
+						return
 					}
 
-					fmt.Println("\t ----> OK")
-					logmar.GetLogger("Download").Info(fmt.Sprintf("Module(%s) file integrity verification completed", item))
+					fmt.Printf("All modules are ready and generated %s file\r\n", filepath.Base(fileok))
+					logmar.GetLogger("Download").Info(fmt.Sprintf("All modules are ready and generated %s file", filepath.Base(fileok)))
+					_ = f.Close()
+
+				} else {
+					logmar.GetLogger("Download").Error("failed to download modules")
 				}
-			}
-
-			if isok {
-				f, err := os.Create(fileok)
-				if err != nil {
-					programwork.Done()
-					logmar.GetLogger("Download").Error("Failed to create ok tag: ", err.Error())
-					continue
-				}
-
-				fmt.Printf("All modules are ready and generated %s file\r\n", filepath.Base(fileok))
-				logmar.GetLogger("Download").Info(fmt.Sprintf("All modules are ready and generated %s file", filepath.Base(fileok)))
-				_ = f.Close()
-
-			} else {
-				logmar.GetLogger("Download").Error("failed to download modules")
-			}
-
-			programwork.Done()
+			}()
 		}
 	}
 }
@@ -438,22 +429,24 @@ func Expiration() {
 			}
 
 			programwork.Run()
-			var removetag = fmt.Sprintf("%s.OK", strings.NewReplacer(".dat", "", ".DAT", "").Replace(resp.Partnumber))
-			logmar.GetLogger("Expiration").Info(fmt.Sprintf("Server notifies to delete expired modules\t----> Partnumner(%s) modules(%s)\r\n", resp.Partnumber, resp.Modulename))
-			if _, exist := os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, removetag}, "/")); !os.IsNotExist(exist) {
-				_ = os.Remove(strings.Join([]string{serverconfiguration.Setting.Common, removetag}, "/"))
-				logmar.GetLogger("Expiration").Info(fmt.Sprintf("Remove completed Tag\t----> %s", removetag))
-			}
-
-			for _, item := range resp.Modulename {
-				if _, exist := os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, item}, "/")); !os.IsNotExist(exist) {
-					_ = os.Remove(strings.Join([]string{serverconfiguration.Setting.Common, item}, "/"))
-					logmar.GetLogger("Expiration").Info(fmt.Sprintf("Remove expiration module\t----> %s", strings.Join([]string{serverconfiguration.Setting.Common, item}, "/")))
+			func() {
+				defer programwork.Done()
+				var removetag = fmt.Sprintf("%s.OK", strings.NewReplacer(".dat", "", ".DAT", "").Replace(resp.Partnumber))
+				logmar.GetLogger("Expiration").Info(fmt.Sprintf("Server notifies to delete expired modules\t----> Partnumner(%s) modules(%s)\r\n", resp.Partnumber, resp.Modulename))
+				if _, exist := os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, removetag}, "/")); !os.IsNotExist(exist) {
+					_ = os.Remove(strings.Join([]string{serverconfiguration.Setting.Common, removetag}, "/"))
+					logmar.GetLogger("Expiration").Info(fmt.Sprintf("Remove completed Tag\t----> %s", removetag))
 				}
-			}
 
-			logmar.GetLogger("Expiration").Info("Delete expiation module completed")
-			programwork.Done()
+				for _, item := range resp.Modulename {
+					if _, exist := os.Stat(strings.Join([]string{serverconfiguration.Setting.Common, item}, "/")); !os.IsNotExist(exist) {
+						_ = os.Remove(strings.Join([]string{serverconfiguration.Setting.Common, item}, "/"))
+						logmar.GetLogger("Expiration").Info(fmt.Sprintf("Remove expiration module\t----> %s", strings.Join([]string{serverconfiguration.Setting.Common, item}, "/")))
+					}
+				}
+
+				logmar.GetLogger("Expiration").Info("Delete expiation module completed")
+			}()
 		}
 	}
 }
@@ -479,25 +472,26 @@ func Monitor(monitorpath string, noticechan chan string) {
 			if !ok {
 				return
 			}
-
-			programwork.Run()
 			if event.Op&fsnotify.Create == fsnotify.Create {
-				logmar.GetLogger("Monitor").Info("Folder change detected: %s", event.Name)
-				time.Sleep(time.Second * 1)
-				if info, err := os.Stat(event.Name); err != nil {
-					programwork.Done()
-					logmar.GetLogger("Monitor").Error(fmt.Sprintf("Get Path Info Error: %s", err.Error()))
-					continue
-				} else {
-					if info.IsDir() {
-						programwork.Done()
-						logmar.GetLogger("Monitor").Info(fmt.Sprintf("Listen to folder creation: %s", event.Name))
-						continue
+				programwork.Run()
+
+				func() {
+					defer programwork.Done()
+
+					logmar.GetLogger("Monitor").Info("Folder change detected: %s", event.Name)
+					time.Sleep(time.Second * 1)
+					if info, err := os.Stat(event.Name); err != nil {
+						logmar.GetLogger("Monitor").Error(fmt.Sprintf("Get Path Info Error: %s", err.Error()))
+						return
+					} else {
+						if info.IsDir() {
+							logmar.GetLogger("Monitor").Info(fmt.Sprintf("Listen to folder creation: %s", event.Name))
+							return
+						}
+						logmar.GetLogger("Monitor").Info(fmt.Sprintf("Monitor new create: %s", event.Name))
+						noticechan <- event.Name
 					}
-					logmar.GetLogger("Monitor").Info(fmt.Sprintf("Monitor new create: %s", event.Name))
-					noticechan <- event.Name
-					programwork.Done()
-				}
+				}()
 			}
 		case err = <-monitordir.Errors:
 			logmar.GetLogger("Monitor").Error("Monitor Path Error: %s", err.Error())

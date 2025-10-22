@@ -40,7 +40,6 @@ message ModuleReloadRequest {
 
 message EmptyResponse {}
 
-
 message MD5Request {}
 
 message MD5Response {

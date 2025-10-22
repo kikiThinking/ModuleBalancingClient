@@ -89,6 +89,7 @@ func Download(ctx context.Context, conn *grpc.ClientConn, fp, serverip string) e
 	var (
 		stream   grpc.ServerStreamingClient[rpc.ModulePushResponse]
 		dlclient = rpc.NewModuleClient(conn)
+		reload   = false
 	)
 
 	// 判断文件夹是否存在, 如果不存在创建文件夹, 防止创建文件时发生panic
@@ -98,6 +99,7 @@ func Download(ctx context.Context, conn *grpc.ClientConn, fp, serverip string) e
 		}
 	}
 
+RELOAD:
 	if stream, err = dlclient.Push(ctx, &rpc.ModuleDownloadRequest{Serveraddress: serverip, Filename: filepath.Base(fp), Offset: 0}); err != nil {
 		return err
 	}
@@ -197,11 +199,16 @@ func Download(ctx context.Context, conn *grpc.ClientConn, fp, serverip string) e
 	}
 
 	// 判断下载的文件大小与服务端提供的是否一致
-	if size != filesize {
-		return errors.New("files are different sizes")
-	}
-
-	if !strings.EqualFold(crc[0], strconv.FormatUint(fcrc, 10)) {
+	if size != filesize || !strings.EqualFold(crc[0], strconv.FormatUint(fcrc, 10)) {
+		if !reload {
+			reload = true
+			ctxforreload, clsforreload := context.WithCancel(context.Background())
+			defer clsforreload()
+			if err = Modulereload(ctxforreload, conn, serverip, filepath.Base(fp)); err != nil {
+				return fmt.Errorf("failed to reload module: %s", err.Error())
+			}
+			goto RELOAD
+		}
 		return errors.New("the crc64 values are inconsistent, and the file may have been damaged during the download process")
 	}
 
