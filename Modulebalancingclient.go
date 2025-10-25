@@ -41,7 +41,7 @@ var (
 	conn                  *grpc.ClientConn
 	serverconfiguration   *env.Configuration
 	waitupgrade           = make(chan struct{}, 1)
-	moduledownloadprocess = make(chan string, 10)
+	moduledownloadprocess = make(chan string, 20)
 	logmar                = logmanager.InitManager()
 	updatestoreprocess    = make(chan *rpc.StorerecordRequest, 10)
 )
@@ -123,6 +123,22 @@ func main() {
 	}
 
 	defer conn.Close()
+
+	// 加载程序在重启阶段未处理的DDD文件
+	dirs, err := os.ReadDir(serverconfiguration.Setting.Chkdir)
+	if err != nil {
+		log.Fatalf("failed to read dir: %v", err)
+	}
+
+	if len(dirs) != 0 {
+		for _, dir := range dirs {
+			if dir.IsDir() {
+				continue
+			}
+			moduledownloadprocess <- filepath.Join(serverconfiguration.Setting.Chkdir, dir.Name())
+		}
+	}
+
 	go Expiration()
 	go Updatestore(updatestoreprocess)
 	go Monitor(serverconfiguration.Setting.Chkdir, moduledownloadprocess)
