@@ -41,7 +41,7 @@ var (
 	conn                  *grpc.ClientConn
 	serverconfiguration   *env.Configuration
 	waitupgrade           = make(chan struct{}, 1)
-	moduledownloadprocess = make(chan string, 20)
+	moduledownloadprocess = make(chan string, 50)
 	logmar                = logmanager.InitManager()
 	updatestoreprocess    = make(chan *rpc.StorerecordRequest, 10)
 )
@@ -114,6 +114,15 @@ func init() {
 		MaxBackups:   90,
 		MinLevel:     logmanager.INFO,
 	})
+
+	// Clean Timeout file
+	logmar.RegisterBusiness(logmanager.LoggerConfig{
+		BusinessName: "Clean",
+		LogDir:       fmt.Sprintf(strings.Join([]string{readrunpath(), "logs", "clean"}, `\`)),
+		MaxSize:      1,
+		MaxBackups:   90,
+		MinLevel:     logmanager.INFO,
+	})
 }
 
 func main() {
@@ -143,6 +152,9 @@ func main() {
 	go Updatestore(updatestoreprocess)
 	go Monitor(serverconfiguration.Setting.Chkdir, moduledownloadprocess)
 	go ClientUpgrade()
+
+	// 程序清理超时的DDD文件
+	go ServicesCleanFiles(serverconfiguration.Setting.Chkdir, time.Hour, logmar.GetLogger("Clean"))
 
 	for {
 		select {
@@ -577,4 +589,45 @@ func Programinformation() {
 `
 
 	fmt.Printf("%s\r\n\r\n", programname)
+}
+
+func ServicesCleanFiles(fp string, interval time.Duration, logWri *logmanager.BusinessLogger) {
+	var restart = time.NewTicker(interval)
+	defer restart.Stop()
+
+	for range restart.C {
+		restart.Stop()
+		fmt.Println("Clean up timeout DDD files....")
+		for {
+			time.Sleep(time.Second * 10)
+			if programwork.IsWorking() {
+				continue
+			}
+
+			dirs, err := os.ReadDir(fp)
+			if err != nil {
+				logWri.Error(fmt.Sprintf("Failed reading directory(%s)", err.Error()))
+				break
+			}
+
+			if len(dirs) == 0 {
+				break
+			}
+
+			for _, dir := range dirs {
+				if dir.IsDir() {
+					continue
+				}
+
+				if err = os.Remove(filepath.Join(fp, dir.Name())); err != nil {
+					logWri.Error(fmt.Sprintf("Failed to remove file(%s)", dir.Name()))
+					continue
+				}
+
+				fmt.Println("Removed timeout file:", dir.Name())
+			}
+		}
+		restart.Reset(interval)
+		fmt.Println("Clean END")
+	}
 }
