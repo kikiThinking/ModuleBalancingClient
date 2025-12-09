@@ -597,7 +597,6 @@ func ServicesCleanFiles(fp string, interval time.Duration, logWri *logmanager.Bu
 
 	for range restart.C {
 		restart.Stop()
-		fmt.Println("Clean up timeout DDD files....")
 		for {
 			time.Sleep(time.Second * 10)
 			if programwork.IsWorking() {
@@ -628,6 +627,5 @@ func ServicesCleanFiles(fp string, interval time.Duration, logWri *logmanager.Bu
 			}
 		}
 		restart.Reset(interval)
-		fmt.Println("Clean END")
 	}
 }
